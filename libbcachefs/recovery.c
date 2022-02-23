@@ -4,6 +4,7 @@
 #include "bkey_buf.h"
 #include "alloc_background.h"
 #include "btree_gc.h"
+#include "btree_repair_missing_root.h"
 #include "btree_update.h"
 #include "btree_update_interior.h"
 #include "btree_io.h"
@@ -13,6 +14,7 @@
 #include "error.h"
 #include "fs-common.h"
 #include "fsck.h"
+#include "io.h"
 #include "journal_io.h"
 #include "journal_reclaim.h"
 #include "journal_seq_blacklist.h"
@@ -138,7 +140,7 @@ int bch2_journal_key_insert_take(struct bch_fs *c, enum btree_id id,
 	if (keys->nr == keys->size) {
 		struct journal_keys new_keys = {
 			.nr			= keys->nr,
-			.size			= keys->size * 2,
+			.size			= max(keys->size * 2, 8UL),
 			.journal_seq_base	= keys->journal_seq_base,
 		};
 
@@ -530,9 +532,6 @@ static int bch2_journal_replay(struct bch_fs *c)
 	     sizeof(keys_sorted[0]),
 	     journal_sort_seq_cmp, NULL);
 
-	if (keys->nr)
-		replay_now_at(j, keys->journal_seq_base);
-
 	for (i = 0; i < keys->nr; i++) {
 		k = keys_sorted[i];
 
@@ -844,13 +843,22 @@ static int read_btree_roots(struct bch_fs *c)
 		}
 
 		ret = bch2_btree_root_read(c, i, &r->key, r->level);
-		if (ret) {
-			__fsck_err(c, i == BTREE_ID_alloc
-				   ? FSCK_CAN_IGNORE : 0,
-				   "error reading btree root %s",
-				   bch2_btree_ids[i]);
-			if (i == BTREE_ID_alloc)
+		if (mustfix_fsck_err_on(ret, c, "error reading btree root %s",
+					bch2_btree_ids[i])) {
+			if (!bch2_repair_missing_btree_root(c, i)) {
+				ret = 0;
+				continue;
+			}
+
+			if (i == BTREE_ID_alloc) {
 				c->sb.compat &= ~(1ULL << BCH_COMPAT_alloc_info);
+				ret = 0;
+				c->opts.fsck = true;
+			}
+
+			bch_err(c, "Unable to find any readable btree root for %s, halting",
+				bch2_btree_ids[i]);
+			return ret;
 		}
 	}
 
@@ -1139,6 +1147,7 @@ use_clean:
 
 	clear_bit(BCH_FS_REBUILD_REPLICAS, &c->flags);
 	set_bit(BCH_FS_INITIAL_GC_DONE, &c->flags);
+	set_bit(BCH_FS_MAY_GO_RW, &c->flags);
 
 	/*
 	 * Skip past versions that might have possibly been used (as nonces),
@@ -1262,6 +1271,7 @@ out:
 		bch2_journal_keys_free(&c->journal_keys);
 		bch2_journal_entries_free(&c->journal_entries);
 	}
+	bch2_find_btree_nodes_exit(&c->found_btree_nodes);
 	kfree(clean);
 	if (ret)
 		bch_err(c, "Error in recovery: %s (%i)", err, ret);
@@ -1299,6 +1309,7 @@ int bch2_fs_initialize(struct bch_fs *c)
 	mutex_unlock(&c->sb_lock);
 
 	set_bit(BCH_FS_INITIAL_GC_DONE, &c->flags);
+	set_bit(BCH_FS_MAY_GO_RW, &c->flags);
 	set_bit(BCH_FS_FSCK_DONE, &c->flags);
 
 	for (i = 0; i < BTREE_ID_NR; i++)

@@ -515,6 +515,7 @@ enum {
 	BCH_FS_TOPOLOGY_REPAIR_DONE,
 	BCH_FS_FSCK_DONE,
 	BCH_FS_STARTED,
+	BCH_FS_MAY_GO_RW,
 	BCH_FS_RW,
 	BCH_FS_WAS_RW,
 
@@ -569,6 +570,27 @@ struct journal_keys {
 	size_t			nr;
 	size_t			size;
 	u64			journal_seq_base;
+};
+
+struct find_btree_nodes {
+	unsigned			btree_ids;
+	int				ret;
+	struct mutex			lock;
+	size_t				nr, size;
+	struct found_btree_node {
+		bool			range_updated;
+		bool			overwritten;
+		u8			btree_id;
+		u8			level;
+		u32			seq;
+		u64			cookie;
+
+		struct bpos		min_key;
+		struct bpos		max_key;
+
+		unsigned		nr_ptrs;
+		struct bch_extent_ptr	ptrs[BCH_REPLICAS_MAX];
+	}				*d;
 };
 
 struct btree_path_buf {
@@ -906,6 +928,8 @@ struct bch_fs {
 	struct list_head	journal_entries;
 	struct journal_keys	journal_keys;
 	struct list_head	journal_iters;
+
+	struct find_btree_nodes	found_btree_nodes;
 
 	u64			last_bucket_seq_cleanup;
 
