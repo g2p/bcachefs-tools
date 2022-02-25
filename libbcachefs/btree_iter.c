@@ -1806,8 +1806,6 @@ void bch2_dump_trans_paths_updates(struct btree_trans *trans)
 	unsigned idx;
 	char buf1[300], buf2[300];
 
-	btree_trans_verify_sorted(trans);
-
 	trans_for_each_path_inorder(trans, path, idx)
 		printk(KERN_ERR "path: idx %u ref %u:%u%s%s btree %s pos %s locks %u %pS\n",
 		       path->idx, path->ref, path->intent_ref,
@@ -1873,6 +1871,7 @@ struct btree_path *bch2_path_get(struct btree_trans *trans,
 	int i;
 
 	BUG_ON(trans->restarted);
+	btree_trans_verify_sorted(trans);
 
 	trans_for_each_path_inorder(trans, path, i) {
 		if (__btree_path_cmp(path,
@@ -1967,6 +1966,7 @@ inline struct bkey_s_c bch2_btree_path_peek_slot(struct btree_path *path, struct
 
 		EBUG_ON(path->uptodate != BTREE_ITER_UPTODATE);
 
+		*u = ck->k->k;
 		k = bkey_i_to_s_c(ck->k);
 	}
 
@@ -2173,30 +2173,13 @@ static inline struct bkey_i *btree_trans_peek_updates(struct btree_trans *trans,
 }
 
 static noinline
-struct bkey_i *__btree_trans_peek_journal(struct btree_trans *trans,
-					  struct btree_path *path)
-{
-	struct journal_keys *keys = &trans->c->journal_keys;
-	size_t idx = bch2_journal_key_search(keys, path->btree_id,
-					     path->level, path->pos);
-
-	while (idx < keys->nr && keys->d[idx].overwritten)
-		idx++;
-
-	return (idx < keys->nr &&
-		keys->d[idx].btree_id	== path->btree_id &&
-		keys->d[idx].level	== path->level)
-		? keys->d[idx].k
-		: NULL;
-}
-
-static noinline
 struct bkey_s_c btree_trans_peek_journal(struct btree_trans *trans,
 					 struct btree_iter *iter,
 					 struct bkey_s_c k)
 {
 	struct bkey_i *next_journal =
-		__btree_trans_peek_journal(trans, iter->path);
+		bch2_journal_keys_peek(trans->c, iter->btree_id, 0,
+				       iter->path->pos);
 
 	if (next_journal &&
 	    bpos_cmp(next_journal->k.p,
@@ -2635,7 +2618,8 @@ struct bkey_s_c bch2_btree_iter_peek_slot(struct btree_iter *iter)
 		}
 
 		if (unlikely(iter->flags & BTREE_ITER_WITH_JOURNAL) &&
-		    (next_update = __btree_trans_peek_journal(trans, iter->path)) &&
+		    (next_update = bch2_journal_keys_peek(trans->c, iter->btree_id,
+							  0, iter->pos)) &&
 		    !bpos_cmp(next_update->k.p, iter->pos)) {
 			iter->k = next_update->k;
 			k = bkey_i_to_s_c(next_update);
@@ -2748,7 +2732,10 @@ static void btree_trans_verify_sorted(struct btree_trans *trans)
 	unsigned i;
 
 	trans_for_each_path_inorder(trans, path, i) {
-		BUG_ON(prev && btree_path_cmp(prev, path) > 0);
+		if (prev && btree_path_cmp(prev, path) > 0) {
+			bch2_dump_trans_paths_updates(trans);
+			panic("trans paths out of order!\n");
+		}
 		prev = path;
 	}
 #endif
@@ -3005,6 +2992,8 @@ void bch2_trans_begin(struct btree_trans *trans)
 	}
 
 	trans_for_each_path(trans, path) {
+		path->should_be_locked = false;
+
 		/*
 		 * XXX: we probably shouldn't be doing this if the transaction
 		 * was restarted, but currently we still overflow transaction
@@ -3013,7 +3002,7 @@ void bch2_trans_begin(struct btree_trans *trans)
 		if (!path->ref && !path->preserve)
 			__bch2_path_free(trans, path);
 		else
-			path->preserve = path->should_be_locked = false;
+			path->preserve = false;
 	}
 
 	bch2_trans_cond_resched(trans);
