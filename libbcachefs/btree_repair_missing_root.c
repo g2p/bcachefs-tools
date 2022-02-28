@@ -59,17 +59,6 @@ static int found_btree_node_cmp_cookie(const void *_l, const void *_r)
 		cmp_int(l->cookie,	r->cookie);
 }
 
-static int found_btree_node_cmp_pos(const void *_l, const void *_r)
-{
-	const struct found_btree_node *l = _l;
-	const struct found_btree_node *r = _r;
-
-	return  cmp_int(l->btree_id,	r->btree_id) ?:
-	       -cmp_int(l->level,	r->level) ?:
-		bpos_cmp(l->min_key,	r->min_key) ?:
-	       -cmp_int(l->seq,		r->seq);
-}
-
 /*
  * Given two found btree nodes, if their sequence numbers are equal, take the
  * one that's readable:
@@ -104,6 +93,18 @@ static int found_btree_node_cmp_time(struct bch_fs *c,
 		six_unlock_read(&b_r->c.lock);
 
 	return ret;
+}
+
+static int found_btree_node_cmp_pos(const void *_l, const void *_r, const void *priv)
+{
+	struct bch_fs *c = (void *) priv;
+	const struct found_btree_node *l = _l;
+	const struct found_btree_node *r = _r;
+
+	return  cmp_int(l->btree_id,	r->btree_id) ?:
+	       -cmp_int(l->level,	r->level) ?:
+		bpos_cmp(l->min_key,	r->min_key) ?:
+	       -found_btree_node_cmp_time(c, l, r);
 }
 
 static void try_read_btree_node(struct find_btree_nodes *f, struct bch_dev *ca,
@@ -248,10 +249,11 @@ err:
 	return f->ret ?: ret;
 }
 
-static void bubble_up(struct found_btree_node *n, struct found_btree_node *end)
+static void bubble_up(struct bch_fs *c,
+		      struct found_btree_node *n, struct found_btree_node *end)
 {
 	while (n + 1 < end &&
-	       found_btree_node_cmp_pos(n, n + 1) > 0) {
+	       found_btree_node_cmp_pos(n, n + 1,c ) > 0) {
 		swap(n[0], n[1]);
 		n++;
 	}
@@ -278,7 +280,7 @@ again:
 				n->overwritten = true;
 			else {
 				n->min_key = bpos_successor(start->max_key);
-				bubble_up(n, end);
+				bubble_up(c, n, end);
 				goto again;
 			}
 		} else if (cmp < 0) {
@@ -350,7 +352,7 @@ static int bch2_scan_devices_for_btree_nodes(struct bch_fs *c)
 	swap(f->d, d);
 	f->nr = dst;
 
-	sort(f->d, f->nr, sizeof(f->d[0]), found_btree_node_cmp_pos, NULL);
+	sort_r(f->d, f->nr, sizeof(f->d[0]), found_btree_node_cmp_pos, NULL, c);
 
 	bch_verbose(c, "Nodes found before overwrites:");
 	for (i = f->d; i < f->d + f->nr; i++) {
