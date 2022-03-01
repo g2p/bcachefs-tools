@@ -70,10 +70,11 @@ static int found_btree_node_cmp_time(struct bch_fs *c,
 	__BKEY_PADDED(k, BKEY_BTREE_PTR_VAL_U64s_MAX) k_l;
 	__BKEY_PADDED(k, BKEY_BTREE_PTR_VAL_U64s_MAX) k_r;
 	struct btree *b_l, *b_r;
-	int ret;
+	int ret, cmp = cmp_int(l->version, r->version) ?:
+		cmp_int(l->seq, r->seq);
 
-	if (l->seq != r->seq)
-		return cmp_int(l->seq, r->seq);
+	if (cmp)
+		return cmp;
 
 	found_btree_node_to_key(&k_l.k, l);
 	found_btree_node_to_key(&k_r.k, l);
@@ -157,6 +158,7 @@ static void try_read_btree_node(struct find_btree_nodes *f, struct bch_dev *ca,
 	f->d[f->nr++] = (struct found_btree_node) {
 		.btree_id	= BTREE_NODE_ID(bn),
 		.level		= BTREE_NODE_LEVEL(bn),
+		.version	= le16_to_cpu(bn->keys.version),
 		.seq		= BTREE_NODE_SEQ(bn),
 		.cookie		= le64_to_cpu(bn->keys.seq),
 		.min_key	= bn->min_key,
@@ -280,14 +282,15 @@ again:
 				n->overwritten = true;
 			else {
 				n->min_key = bpos_successor(start->max_key);
+				n->range_updated = true;
 				bubble_up(c, n, end);
 				goto again;
 			}
 		} else if (cmp < 0) {
 			BUG_ON(bpos_cmp(n->min_key, start->min_key) <= 0);
 
-			start->range_updated = true;
 			start->max_key = bpos_predecessor(n->min_key);
+			start->range_updated = true;
 		} else {
 			char buf[200];
 
