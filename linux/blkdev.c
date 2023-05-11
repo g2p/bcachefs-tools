@@ -22,6 +22,8 @@
 
 #include "tools-util.h"
 
+static DECLARE_WAIT_QUEUE_HEAD(iocbs_outstanding);
+
 struct fops {
 	void (*init)(void);
 	void (*cleanup)(void);
@@ -301,6 +303,9 @@ static int aio_completion_thread(void *arg)
 		if (ret < 0)
 			die("io_getevents() error: %s", strerror(-ret));
 
+		if (ret > 0)
+			wake_up(&iocbs_outstanding);
+
 		for (ev = events; ev < events + ret; ev++) {
 			struct bio *bio = (struct bio *) ev->data;
 
@@ -375,6 +380,17 @@ static void aio_cleanup(void)
 	close(fds[1]);
 }
 
+static int io_submit_wrapper(io_context_t ctx, long nr, struct iocb *iocbs[])
+{
+	int ret = io_submit(ctx, nr, iocbs);
+
+	if (ret == -EAGAIN)
+		pr_err("Saw -EAGAIN from io_submit(), nr outstanding %i\n",
+		       atomic_read(&running_requests));
+
+	return ret;
+}
+
 static void aio_op(struct bio *bio, struct iovec *iov, unsigned i, int opcode)
 {
 	ssize_t ret;
@@ -391,7 +407,10 @@ static void aio_op(struct bio *bio, struct iovec *iov, unsigned i, int opcode)
 	}, *iocbp = &iocb;
 
 	atomic_inc(&running_requests);
-	ret = io_submit(aio_ctx, 1, &iocbp);
+
+	wait_event(iocbs_outstanding,
+		   (ret = io_submit_wrapper(aio_ctx, 1, &iocbp)) != -EAGAIN);
+
 	if (ret != 1)
 		die("io_submit err: %s", strerror(-ret));
 }
