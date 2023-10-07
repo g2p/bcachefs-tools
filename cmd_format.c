@@ -245,7 +245,7 @@ int cmd_format(int argc, char *argv[])
 
 		buf.human_readable_units = true;
 
-		bch2_sb_to_text(&buf, sb, false, 1 << BCH_SB_FIELD_members);
+		bch2_sb_to_text(&buf, sb, false, 1 << BCH_SB_FIELD_members_v2);
 		printf("%s", buf.buf);
 
 		printbuf_exit(&buf);
@@ -305,8 +305,9 @@ int cmd_show_super(int argc, char *argv[])
 		{ "help",			0, NULL, 'h' },
 		{ NULL }
 	};
-	unsigned fields = 1 << BCH_SB_FIELD_members;
+	unsigned fields = 0;
 	bool print_layout = false;
+	bool print_default_fields = true;
 	int opt;
 
 	while ((opt = getopt_long(argc, argv, "f:lh", longopts, NULL)) != -1)
@@ -316,6 +317,7 @@ int cmd_show_super(int argc, char *argv[])
 				? ~0
 				: read_flag_list_or_die(optarg,
 					bch2_sb_fields, "superblock field");
+			print_default_fields = false;
 			break;
 		case 'l':
 			print_layout = true;
@@ -341,6 +343,11 @@ int cmd_show_super(int argc, char *argv[])
 	int ret = bch2_read_super(dev, &opts, &sb);
 	if (ret)
 		die("Error opening %s: %s", dev, bch2_err_str(ret));
+
+	if (print_default_fields)
+		fields = bch2_sb_get_members_v2(sb.sb)
+			? 1 << BCH_SB_FIELD_members_v2
+			: 1 << BCH_SB_FIELD_members_v1;
 
 	struct printbuf buf = PRINTBUF;
 

@@ -374,13 +374,12 @@ static int read_btree_roots(struct bch_fs *c)
 
 		ret = bch2_btree_root_read(c, i, &r->key, r->level);
 		if (ret) {
-			__fsck_err(c,
-				   btree_id_is_alloc(i)
-				   ? FSCK_CAN_IGNORE : 0,
-				   "error reading btree root %s",
-				   bch2_btree_ids[i]);
+			fsck_err(c,
+				 "error reading btree root %s",
+				 bch2_btree_ids[i]);
 			if (btree_id_is_alloc(i))
 				c->sb.compat &= ~(1ULL << BCH_COMPAT_alloc_info);
+			ret = 0;
 		}
 	}
 
@@ -645,7 +644,7 @@ int bch2_fs_recovery(struct bch_fs *c)
 {
 	struct bch_sb_field_clean *clean = NULL;
 	struct jset *last_journal_entry = NULL;
-	u64 last_seq, blacklist_seq, journal_seq;
+	u64 last_seq = 0, blacklist_seq, journal_seq;
 	bool write_sb = false;
 	int ret = 0;
 

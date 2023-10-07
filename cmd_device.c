@@ -414,7 +414,7 @@ int cmd_device_set_state(int argc, char *argv[])
 		if (ret)
 			die("error opening %s: %s", dev_str, bch2_err_str(ret));
 
-		struct bch_member *m = bch2_sb_get_members(sb.sb)->members + sb.sb->dev_idx;
+		struct bch_member *m = bch2_members_v2_get_mut(sb.sb, sb.sb->dev_idx);
 
 		SET_BCH_MEMBER_STATE(m, new_state);
 
@@ -510,16 +510,11 @@ int cmd_device_resize(int argc, char *argv[])
 		if (idx >= sb->nr_devices)
 			die("error reading superblock: dev idx >= sb->nr_devices");
 
-		struct bch_sb_field_members *mi = bch2_sb_get_members(sb);
-		if (!mi)
-			die("error reading superblock: no member info");
+		struct bch_member m = bch2_sb_member_get(sb, idx);
 
-		/* could also just read this out of sysfs... meh */
-		struct bch_member *m = mi->members + idx;
+		u64 nbuckets = size / le16_to_cpu(m.bucket_size);
 
-		u64 nbuckets = size / le16_to_cpu(m->bucket_size);
-
-		if (nbuckets < le64_to_cpu(m->nbuckets))
+		if (nbuckets < le64_to_cpu(m.nbuckets))
 			die("Shrinking not supported yet");
 
 		printf("resizing %s to %llu buckets\n", dev, nbuckets);
@@ -616,14 +611,9 @@ int cmd_device_resize_journal(int argc, char *argv[])
 		if (idx >= sb->nr_devices)
 			die("error reading superblock: dev idx >= sb->nr_devices");
 
-		struct bch_sb_field_members *mi = bch2_sb_get_members(sb);
-		if (!mi)
-			die("error reading superblock: no member info");
+		struct bch_member m = bch2_sb_member_get(sb, idx);
 
-		/* could also just read this out of sysfs... meh */
-		struct bch_member *m = mi->members + idx;
-
-		u64 nbuckets = size / le16_to_cpu(m->bucket_size);
+		u64 nbuckets = size / le16_to_cpu(m.bucket_size);
 
 		printf("resizing journal on %s to %llu buckets\n", dev, nbuckets);
 		bchu_disk_resize_journal(fs, idx, nbuckets);

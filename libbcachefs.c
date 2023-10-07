@@ -150,7 +150,6 @@ struct bch_sb *bch2_format(struct bch_opt_strs	fs_opt_strs,
 {
 	struct bch_sb_handle sb = { NULL };
 	struct dev_opts *i;
-	struct bch_sb_field_members *mi;
 	unsigned max_dev_block_size = 0;
 	unsigned opt_id;
 
@@ -222,12 +221,13 @@ struct bch_sb *bch2_format(struct bch_opt_strs	fs_opt_strs,
 	sb.sb->time_precision	= cpu_to_le32(1);
 
 	/* Member info: */
-	mi = bch2_sb_resize_members(&sb,
+	struct bch_sb_field_members_v2 *mi =
+		bch2_sb_resize_members_v2(&sb,
 			(sizeof(*mi) + sizeof(struct bch_member) *
 			nr_devs) / sizeof(u64));
 
 	for (i = devs; i < devs + nr_devs; i++) {
-		struct bch_member *m = mi->members + (i - devs);
+		struct bch_member *m = bch2_members_v2_get_mut(sb.sb, (i - devs));
 
 		uuid_generate(m->uuid.b);
 		m->nbuckets	= cpu_to_le64(i->nbuckets);
@@ -255,9 +255,7 @@ struct bch_sb *bch2_format(struct bch_opt_strs	fs_opt_strs,
 		 * Recompute mi and m after each sb modification: its location
 		 * in memory may have changed due to reallocation.
 		 */
-		mi = bch2_sb_get_members(sb.sb);
-		m = mi->members + (i - devs);
-
+		m = bch2_members_v2_get_mut(sb.sb, (i - devs));
 		SET_BCH_MEMBER_GROUP(m,	idx + 1);
 	}
 

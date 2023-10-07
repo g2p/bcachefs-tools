@@ -355,7 +355,7 @@ static int bch2_sb_validate(struct bch_sb_handle *disk_sb, struct printbuf *out,
 {
 	struct bch_sb *sb = disk_sb->sb;
 	struct bch_sb_field *f;
-	struct bch_sb_field_members *mi;
+	struct bch_sb_field_members_v1 *mi;
 	enum bch_opt_id opt_id;
 	u16 block_size;
 	int ret;
@@ -458,7 +458,7 @@ static int bch2_sb_validate(struct bch_sb_handle *disk_sb, struct printbuf *out,
 	}
 
 	/* members must be validated first: */
-	mi = bch2_sb_get_members(sb);
+	mi = bch2_sb_get_members_v1(sb);
 	if (!mi) {
 		prt_printf(out, "Invalid superblock: member info area missing");
 		return -BCH_ERR_invalid_sb_members_missing;
@@ -469,7 +469,7 @@ static int bch2_sb_validate(struct bch_sb_handle *disk_sb, struct printbuf *out,
 		return ret;
 
 	vstruct_for_each(sb, f) {
-		if (le32_to_cpu(f->type) == BCH_SB_FIELD_members)
+		if (le32_to_cpu(f->type) == BCH_SB_FIELD_members_v1)
 			continue;
 
 		ret = bch2_sb_field_validate(sb, f, out);
@@ -485,7 +485,6 @@ static int bch2_sb_validate(struct bch_sb_handle *disk_sb, struct printbuf *out,
 static void bch2_sb_update(struct bch_fs *c)
 {
 	struct bch_sb *src = c->disk_sb.sb;
-	struct bch_sb_field_members *mi = bch2_sb_get_members(src);
 	struct bch_dev *ca;
 	unsigned i;
 
@@ -511,8 +510,10 @@ static void bch2_sb_update(struct bch_fs *c)
 	c->sb.features		= le64_to_cpu(src->features[0]);
 	c->sb.compat		= le64_to_cpu(src->compat[0]);
 
-	for_each_member_device(ca, c, i)
-		ca->mi = bch2_mi_to_cpu(mi->members + i);
+	for_each_member_device(ca, c, i) {
+		struct bch_member m = bch2_sb_member_get(src, i);
+		ca->mi = bch2_mi_to_cpu(&m);
+	}
 }
 
 static int __copy_super(struct bch_sb_handle *dst_handle, struct bch_sb *src)
@@ -891,6 +892,7 @@ int bch2_write_super(struct bch_fs *c)
 	SET_BCH_SB_BIG_ENDIAN(c->disk_sb.sb, CPU_BIG_ENDIAN);
 
 	bch2_sb_counters_from_cpu(c);
+	bch_members_cpy_v2_v1(&c->disk_sb);
 
 	for_each_online_member(ca, c, i)
 		bch2_sb_from_fs(c, ca);
@@ -1125,7 +1127,6 @@ void bch2_sb_layout_to_text(struct printbuf *out, struct bch_sb_layout *l)
 void bch2_sb_to_text(struct printbuf *out, struct bch_sb *sb,
 		     bool print_layout, unsigned fields)
 {
-	struct bch_sb_field_members *mi;
 	struct bch_sb_field *f;
 	u64 fields_have = 0;
 	unsigned nr_devices = 0;
@@ -1133,15 +1134,8 @@ void bch2_sb_to_text(struct printbuf *out, struct bch_sb *sb,
 	if (!out->nr_tabstops)
 		printbuf_tabstop_push(out, 44);
 
-	mi = bch2_sb_get_members(sb);
-	if (mi) {
-		struct bch_member *m;
-
-		for (m = mi->members;
-		     m < mi->members + sb->nr_devices;
-		     m++)
-			nr_devices += bch2_member_exists(m);
-	}
+	for (int i = 0; i < sb->nr_devices; i++)
+		nr_devices += bch2_dev_exists(sb, i);
 
 	prt_printf(out, "External UUID:");
 	prt_tab(out);
